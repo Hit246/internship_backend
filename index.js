@@ -13,10 +13,24 @@ dotenv.config();
 const app = express();
 import path from "path";
 app.use(cors({
-  origin: "http://localhost:3000",
+  origin: function (origin, callback) {
+    // Allow localhost for development and deployed frontend
+    const allowedOrigins = [
+      "http://localhost:3000",
+      "http://localhost:3001",
+      "https://internship-frontend-five.vercel.app",
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+
+    if (!origin || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE"],
-  allowedHeaders: ["Content-Type"]
+  allowedHeaders: ["Content-Type", "Authorization"]
 }));
 app.use(express.json({ limit: "30mb", extended: true }));
 app.use(express.urlencoded({ limit: "30mb", extended: true }));
