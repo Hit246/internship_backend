@@ -83,16 +83,28 @@ export const verifyPayment = async (req, res) => {
         const { userid, razorpay_order_id, razorpay_payment_id, razorpay_signature, planType } = req.body;
 
         if (!userid || !razorpay_order_id || !razorpay_payment_id || !razorpay_signature) {
-            return res.status(400).json({ message: "Missing payment details" });
+            return res.status(400).json({
+                message: "Missing payment details",
+                received: { userid, razorpay_order_id, razorpay_payment_id, razorpay_signature }
+            });
         }
 
         if (!mongoose.Types.ObjectId.isValid(userid)) {
-            return res.status(400).json({ message: "Invalid user ID" });
+            return res.status(400).json({ message: "Invalid user ID format" });
         }
 
         let isValidPayment = false;
 
-        if (razorpay && process.env.RAZORPAY_KEY_SECRET) {
+        // Demo mode check first
+        const isDemoOrder = razorpay_order_id && razorpay_order_id.includes("demo");
+        const isDemoPayment = razorpay_payment_id && razorpay_payment_id.includes("demo");
+
+        if (isDemoOrder && isDemoPayment) {
+            // Demo mode - accept demo payment
+            isValidPayment = true;
+            console.log("Processing demo payment:", { razorpay_order_id, razorpay_payment_id });
+        } else if (razorpay && process.env.RAZORPAY_KEY_SECRET) {
+            // Production mode - verify with Razorpay signature
             const body = razorpay_order_id + "|" + razorpay_payment_id;
             const expectedSignature = crypto
                 .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
@@ -100,10 +112,13 @@ export const verifyPayment = async (req, res) => {
                 .digest("hex");
             isValidPayment = expectedSignature === razorpay_signature;
         } else {
-            isValidPayment = razorpay_order_id.startsWith("order_demo_") || razorpay_payment_id.startsWith("pay_demo_");
+            // Fallback for production without keys
+            console.warn("No Razorpay credentials available for real payment verification");
+            isValidPayment = false;
         }
 
         if (!isValidPayment) {
+            console.error("Payment verification failed:", { razorpay_order_id, razorpay_payment_id, isDemoOrder, isDemoPayment });
             return res.status(400).json({ message: "Payment verification failed" });
         }
 
