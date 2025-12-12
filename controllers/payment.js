@@ -1,7 +1,9 @@
 import Razorpay from "razorpay";
 import User from "../Modals/Auth.js";
+import Payment from "../Modals/Payment.js";
 import mongoose from "mongoose";
 import crypto from "crypto";
+import nodemailer from "nodemailer";
 
 // Initialize Razorpay - with fallback for demo mode
 let razorpay = null;
@@ -14,6 +16,30 @@ try {
     console.warn("Razorpay initialization warning:", err.message);
 }
 
+// setup nodemailer transporter if SMTP config present
+let mailer = null;
+if (process.env.SMTP_HOST && process.env.SMTP_USER && process.env.SMTP_PASS) {
+    mailer = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT || "587"),
+        secure: process.env.SMTP_SECURE === "true",
+        auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASS,
+        },
+    });
+} else {
+    console.warn("Mailer not configured - no SMTP env vars found");
+    console.log({
+        SMTP_HOST: !!process.env.SMTP_HOST,
+        SMTP_USER: !!process.env.SMTP_USER,
+        SMTP_PASS: !!process.env.SMTP_PASS,
+        SMTP_PORT: process.env.SMTP_PORT,
+        SMTP_SECURE: process.env.SMTP_SECURE,
+    });
+
+}
+
 export const createOrder = async (req, res) => {
     try {
         const { userid, planType } = req.body;
@@ -22,13 +48,14 @@ export const createOrder = async (req, res) => {
             return res.status(400).json({ message: "Invalid user ID" });
         }
 
-        // Plan pricing (in paise - smallest unit)
+        // Plan pricing (in paise - smallest unit) and allowed watch durations
         const plans = {
-            monthly: { amount: 9900, description: "1 Month Premium" }, // 99 INR
-            yearly: { amount: 99900, description: "1 Year Premium" }, // 999 INR
+            bronze: { amount: 1000, description: "Bronze Plan - 7 min", allowedWatchDuration: 420, days: 30 },
+            silver: { amount: 5000, description: "Silver Plan - 10 min", allowedWatchDuration: 600, days: 90 },
+            gold: { amount: 10000, description: "Gold Plan - Unlimited", allowedWatchDuration: 0, days: 365 },
         };
 
-        const selectedPlan = plans[planType] || plans.monthly;
+        const selectedPlan = plans[planType] || plans.bronze;
 
         // If Razorpay is available, use it; otherwise use demo mode
         let order;
@@ -59,6 +86,23 @@ export const createOrder = async (req, res) => {
                 receipt: `premium_${userid}_${Date.now()}`,
                 created_at: Math.floor(Date.now() / 1000),
             };
+        }
+
+        // persist payment record
+        try {
+            await Payment.create({
+                userid: new mongoose.Types.ObjectId(userid),
+                razorpayOrderId: order.id,
+                amount: selectedPlan.amount,
+                currency: order.currency || "INR",
+                status: "pending",
+                planType: planType,
+                planDuration: selectedPlan.days,
+                expiryDate: null,
+                allowedWatchDuration: selectedPlan.allowedWatchDuration,
+            });
+        } catch (saveErr) {
+            console.warn("Failed to save payment record:", saveErr.message);
         }
 
         return res.status(200).json({
@@ -122,20 +166,25 @@ export const verifyPayment = async (req, res) => {
             return res.status(400).json({ message: "Payment verification failed" });
         }
 
-        // Calculate premium expiry
-        let premiumExpiry = new Date();
-        if (planType === "yearly") {
-            premiumExpiry.setFullYear(premiumExpiry.getFullYear() + 1);
-        } else {
-            premiumExpiry.setMonth(premiumExpiry.getMonth() + 1);
-        }
+        // Determine plan properties
+        const planMap = {
+            bronze: { days: 30, allowedWatchDuration: 420 },
+            silver: { days: 90, allowedWatchDuration: 600 },
+            gold: { days: 365, allowedWatchDuration: 0 },
+        };
+        const planInfo = planMap[planType] || planMap["bronze"];
 
-        // Update user to premium
+        // Calculate plan expiry
+        const premiumExpiry = new Date();
+        premiumExpiry.setDate(premiumExpiry.getDate() + planInfo.days);
+
+        // Update user plan fields
         const updatedUser = await User.findByIdAndUpdate(
             new mongoose.Types.ObjectId(userid),
             {
-                isPremium: true,
-                premiumExpiry: premiumExpiry,
+                plan: planType,
+                planExpiry: premiumExpiry,
+                allowedWatchDuration: planInfo.allowedWatchDuration,
             },
             { new: true }
         );
@@ -144,13 +193,54 @@ export const verifyPayment = async (req, res) => {
             return res.status(404).json({ message: "User not found" });
         }
 
+        // update payment record
+        try {
+            await Payment.findOneAndUpdate(
+                { razorpayOrderId: razorpay_order_id },
+                {
+                    razorpayPaymentId: razorpay_payment_id,
+                    razorpaySignature: razorpay_signature,
+                    status: "completed",
+                    expiryDate: premiumExpiry,
+                    paymentDate: new Date(),
+                }
+            );
+        } catch (payUpdErr) {
+            console.warn("Failed to update payment record:", payUpdErr.message);
+        }
+
+        // send invoice email if mailer configured
+        try {
+            if (mailer && updatedUser.email) {
+                const mailHtml = `
+                    <h2>Payment Receipt - ${planType.toUpperCase()}</h2>
+                    <p>Hi ${updatedUser.name || updatedUser.email},</p>
+                    <p>Thank you for upgrading to the <strong>${planType}</strong> plan.</p>
+                    <p>Amount: ₹${(Number(req.body.amount || 0) / 100).toFixed(2)}</p>
+                    <p>Order ID: ${razorpay_order_id}</p>
+                    <p>Payment ID: ${razorpay_payment_id}</p>
+                    <p>Plan valid until: ${premiumExpiry.toISOString()}</p>
+                `;
+
+                await mailer.sendMail({
+                    from: process.env.FROM_EMAIL || process.env.SMTP_USER,
+                    to: updatedUser.email,
+                    subject: `YourTube - Payment Receipt (${planType})`,
+                    html: mailHtml,
+                });
+            }
+        } catch (mailErr) {
+            console.warn("Failed to send invoice email:", mailErr.message);
+        }
+
         return res.status(200).json({
             success: true,
-            message: "Payment verified and premium activated",
+            message: "Payment verified and plan activated",
             user: {
                 id: updatedUser._id,
-                isPremium: updatedUser.isPremium,
-                premiumExpiry: updatedUser.premiumExpiry,
+                plan: updatedUser.plan,
+                planExpiry: updatedUser.planExpiry,
+                allowedWatchDuration: updatedUser.allowedWatchDuration,
             },
         });
     } catch (err) {

@@ -6,8 +6,11 @@ const userschema = mongoose.Schema({
   description: { type: String },
   image: { type: String },
   joinedon: { type: Date, default: Date.now },
-  isPremium: { type: Boolean, default: false },
-  premiumExpiry: { type: Date, default: null },
+
+  plan: { type: String, enum: ["free", "bronze", "silver", "gold"], default: "free" },
+  planExpiry: { type: Date, default: null },
+
+  allowedWatchDuration: { type: Number, default: 300 },
 });
 
 export default mongoose.model("user", userschema);

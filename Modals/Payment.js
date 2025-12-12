@@ -33,19 +33,21 @@ const paymentSchema = new mongoose.Schema(
         },
         planType: {
             type: String,
-            enum: ["monthly", "yearly"],
-            default: "monthly",
+            enum: ["free", "bronze", "silver", "gold"],
+            default: "free",
         },
         planDuration: {
-            type: Number, 
+            type: Number,
             default: 30,
         },
+        // allowed watch duration in seconds (0 = unlimited)
+        allowedWatchDuration: { type: Number, default: 300 },
         expiryDate: {
             type: Date,
         },
         downloadLimit: {
             type: Number,
-            default: -1, 
+            default: -1,
         },
         downloadsUsed: {
             type: Number,
@@ -65,6 +67,6 @@ const paymentSchema = new mongoose.Schema(
 // Index for quick lookups
 paymentSchema.index({ userid: 1, status: 1 });
 paymentSchema.index({ userid: 1, expiryDate: 1 });
-paymentSchema.index({ razorpayOrderId: 1 });
+// paymentSchema.index({ razorpayOrderId: 1 });
 
 export default mongoose.model("Payment", paymentSchema);
