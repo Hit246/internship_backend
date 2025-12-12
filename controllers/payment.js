@@ -211,7 +211,8 @@ export const verifyPayment = async (req, res) => {
 
         // send invoice email if mailer configured
         try {
-            if (mailer && updatedUser.email) {
+            const targetEmail = req.body.email || updatedUser.email;
+            if (mailer && targetEmail) {
                 const mailHtml = `
                     <h2>Payment Receipt - ${planType.toUpperCase()}</h2>
                     <p>Hi ${updatedUser.name || updatedUser.email},</p>
@@ -224,10 +225,14 @@ export const verifyPayment = async (req, res) => {
 
                 await mailer.sendMail({
                     from: process.env.FROM_EMAIL || process.env.SMTP_USER,
-                    to: updatedUser.email,
+                    to: targetEmail,
                     subject: `YourTube - Payment Receipt (${planType})`,
                     html: mailHtml,
                 });
+            } else if (!mailer) {
+                console.warn("Mailer not configured; skipping receipt email");
+            } else {
+                console.warn("No user email found; skipping receipt email");
             }
         } catch (mailErr) {
             console.warn("Failed to send invoice email:", mailErr.message);
