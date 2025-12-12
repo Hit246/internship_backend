@@ -8,10 +8,18 @@ import nodemailer from "nodemailer";
 // Initialize Razorpay - with fallback for demo mode
 let razorpay = null;
 try {
-    razorpay = new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
+    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) {
+        console.warn("Razorpay keys missing - running in demo mode", {
+            RAZORPAY_KEY_ID: !!process.env.RAZORPAY_KEY_ID,
+            RAZORPAY_KEY_SECRET: !!process.env.RAZORPAY_KEY_SECRET,
+        });
+    } else {
+        razorpay = new Razorpay({
+            key_id: process.env.RAZORPAY_KEY_ID,
+            key_secret: process.env.RAZORPAY_KEY_SECRET,
+        });
+        console.log("Razorpay initialized with provided keys");
+    }
 } catch (err) {
     console.warn("Razorpay initialization warning:", err.message);
 }
